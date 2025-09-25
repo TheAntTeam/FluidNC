@@ -43,6 +43,22 @@ namespace Spindles {
         }
         setupSpeeds(_output_pin.maxDuty());
         init_atc();
+
+		if (_use_pwm_ramping) {
+            if (maxSpeed() < 300 || _ramp_up_delay_ms < 500 || _ramp_down_delay_ms < 500) {  // Some reasonable values for ramping
+                log_warn("PWM Ramping max speed < 300 or spinup_ms/spindown_ms < 500...disabling");
+				_use_pwm_ramping = false;
+            } else {
+                log_warn("PWM Ramping init else");
+                // TODO: Do we want to deal with a min speed?
+                _ramp_up_dev_increment   = mapSpeed(SpindleState::Cw, maxSpeed()) / (_ramp_up_delay_ms / _ramp_interval);
+                _ramp_down_dev_increment = mapSpeed(SpindleState::Cw, maxSpeed()) / (_ramp_down_delay_ms / _ramp_interval);
+                log_info("PWM Ramping Maxspeed:" << maxSpeed() << " spinup incr:" << _ramp_up_dev_increment
+                                                 << " spindown incr:" << _ramp_down_dev_increment);
+            }
+        }
+
+        //log_info("Maxspeed:" << maxSpeed() << " mapped max:" << mapSpeed(maxSpeed()) << " ovr:" << sys.spindle_speed_ovr);
         config_message();
     }
 
@@ -62,10 +78,25 @@ namespace Spindles {
         }
 
         uint32_t dev_speed = mapSpeed(state, speed);
-        if (state != SpindleState::Disable) {  // Halt or set spindle direction and speed.
-            // XXX this could wreak havoc if the direction is changed without first
-            // spinning down.
-            set_direction(state == SpindleState::Cw);
+        uint32_t dev_speed_0 = mapSpeed(state, 0);
+        if (_use_pwm_ramping) {
+            log_warn("PWM Ramping intercepted");
+            set_enable(state != SpindleState::Disable);
+            if (state != SpindleState::Disable) {
+                if (_direction_pin.defined() && (_direction_pin.read() != (state == SpindleState::Cw))) {
+                    ramp_speed(dev_speed_0);
+                }
+                set_direction(state == SpindleState::Cw);
+                ramp_speed(dev_speed);
+            } else {
+                ramp_speed(dev_speed_0);  // Always want to ramp down on diable
+            }
+        } else {
+            if (state != SpindleState::Disable) {  // Halt or set spindle direction and speed.
+                // XXX this could wreak havoc if the direction is changed without first
+                // spinning down.
+                set_direction(state == SpindleState::Cw);
+            }
         }
 
         // rate adjusted spindles (laser) in M4 set power via the stepper engine, not here
@@ -107,6 +138,39 @@ namespace Spindles {
         _output_pin.setAttr(Pin::Attr::Input);
         _enable_pin.setAttr(Pin::Attr::Input);
         _direction_pin.setAttr(Pin::Attr::Input);
+    }
+
+    void PWM::ramp_speed(uint32_t target_duty) {
+        // speed is given, but we need to work in dev_speed
+        uint32_t next_duty   = _current_duty;  // this is the value that increments in this function
+        bool     spinup      = (target_duty > _current_duty);
+
+        log_warn("Ramp duty from:" << _current_duty << " to:" << target_duty);
+
+        while ((spinup && next_duty < target_duty) || (!spinup && (next_duty > target_duty))) {
+            if (spinup) {
+                if (next_duty + _ramp_up_dev_increment < target_duty) {
+                    next_duty += _ramp_up_dev_increment;
+                } else {
+                    next_duty = target_duty;
+                }
+            } else {
+                if ((next_duty > _ramp_down_dev_increment) && (next_duty - _ramp_down_dev_increment > target_duty)) {  // is is safe to subtract?
+                    next_duty -= _ramp_down_dev_increment;
+                } else {
+                    next_duty = target_duty;
+                }
+            }
+
+            //log_warn("  next duty:" << next_duty);
+
+            set_output(next_duty);
+            _current_duty = next_duty;
+            if (next_duty == target_duty) {
+                return;
+            }
+            delay_ms(_ramp_interval);
+        }
     }
 
     // Configuration registration

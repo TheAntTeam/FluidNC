@@ -164,7 +164,8 @@ namespace Spindles {
     }
 
     uint32_t IRAM_ATTR Spindle::mapSpeed(SpindleState state, SpindleSpeed speed) {
-        speed             = speed * sys.spindle_speed_ovr / 100;
+        //log_warn("mapSpeed state:" << (int)state << " rpm:" << speed << " ovr:" << sys.spindle_speed_ovr);
+        //speed             = speed * sys.spindle_speed_ovr / 100;
         sys.spindle_speed = speed;
         if (state == SpindleState::Disable) {  // Halt or set spindle direction and speed.
             if (_zero_speed_with_disable) {
@@ -172,9 +173,15 @@ namespace Spindles {
                 return 0;
             }
         }
+
+        log_warn("mapSpeed state:" << (int)state << " rpm:" << speed << " ovr:" << sys.spindle_speed_ovr);
+        log_warn("  speeds size:" << _speeds.size());
+
         if (_speeds.size() == 0) {
             return 0;
         }
+
+        log_warn("  speeds[0] speed:" << _speeds[0].speed << " offset:" << _speeds[0].offset);
         if (speed < _speeds[0].speed) {
             return _speeds[0].offset;
         }
@@ -189,6 +196,9 @@ namespace Spindles {
             }
         }
         uint32_t dev_speed = _speeds[i].offset;
+
+        log_warn("mapSpeed state:" << (int)state << " rpm:" << speed << " ovr:" << sys.spindle_speed_ovr << " idx:" << i
+                                   << " offset:" << _speeds[i].offset << " scale:" << _speeds[i].scale);
 
         // If the requested speed is greater than the maximum map speed,
         // i will be equal to num_segements, in which case we just return
